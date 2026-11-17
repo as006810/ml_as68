@@ -1,55 +1,28 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
-# параметры варианта 4
+# параметры
 a, b, c, d = 0.4, 0.4, 0.08, 0.4
 n_in = 6
 n_hid = 2
 epochs = 2000
 
 # генерация данных
-x = np.linspace(0, 20, 200)
+n_train_pts, n_test_pts = 100, 30
+x = np.arange(n_train_pts + n_test_pts) * 0.5
 y = a * np.cos(b * x) + c * np.sin(d * x)
+y_train, y_test = y[:n_train_pts], y[n_train_pts:]
 
-# делаем выборку по окнам
-X = []
-Y = []
-for i in range(n_in, len(y)):
-    X.append(y[i-n_in:i])
-    Y.append(y[i])
-X = np.array(X)
-Y = np.array(Y)
-
-# делим на train/test
-n_train = int(0.7 * len(X))
-Xtr, Ytr = X[:n_train], Y[:n_train]
-Xte, Yte = X[n_train:], Y[n_train:]
-
-# нормировка
-mx = Xtr.mean(axis=0)
-sx = Xtr.std(axis=0) + 1e-8
-my = Ytr.mean()
-sy = Ytr.std() + 1e-8
-
-Xtr = (Xtr - mx) / sx
-Xte = (Xte - mx) / sx
-Ytr = (Ytr - my) / sy
-Yte = (Yte - my) / sy
+# обучающая выборка по окнам
+Xtr = np.array([y_train[i-n_in:i] for i in range(n_in, n_train_pts)])
+Ytr = y_train[n_in:]
 
 # сигмоида
 def sig(z):
     return 1 / (1 + np.exp(-z))
 
-# инициализация весов
-np.random.seed(1)
-W1 = np.random.randn(n_in, n_hid) * 0.5
-b1 = np.zeros(n_hid)
-W2 = np.random.randn(n_hid, 1) * 0.5
-b2 = np.zeros(1)
-
 # обучение
 def train(alpha):
-    global W1, b1, W2, b2
     np.random.seed(1)
     W1 = np.random.randn(n_in, n_hid) * 0.5
     b1 = np.zeros(n_hid)
@@ -58,12 +31,9 @@ def train(alpha):
     errs = []
     for ep in range(epochs):
         # прямой проход
-        Z1 = Xtr @ W1 + b1
-        A1 = sig(Z1)
-        Z2 = A1 @ W2 + b2
-        pred = Z2.flatten()
-        err = np.mean((pred - Ytr) ** 2)
-        errs.append(err)
+        A1 = sig(Xtr @ W1 + b1)
+        pred = (A1 @ W2 + b2).flatten()
+        errs.append(np.mean((pred - Ytr) ** 2))
         # обратный проход
         dZ2 = 2 * (pred - Ytr) / len(Ytr)
         dW2 = A1.T @ dZ2.reshape(-1, 1)
@@ -76,64 +46,79 @@ def train(alpha):
         b1 -= alpha * db1
         W2 -= alpha * dW2
         b2 -= alpha * db2
-    return errs
+    return (W1, b1, W2, b2), errs
 
-# подбираем alpha
-alphas = [0.01, 0.05, 0.1, 0.2, 0.5]
-best = None
-best_err = 1e9
-best_losses = None
-for al in alphas:
-    losses = train(al)
-    # ошибка на тесте
-    A1 = sig(Xte @ W1 + b1)
-    p = (A1 @ W2 + b2).flatten()
-    e = np.mean((p - Yte) ** 2)
-    print("alpha =", al, " test err =", round(e, 6))
-    if e < best_err:
-        best_err = e
-        best = al
-        best_losses = losses
+def predict(params, X):
+    W1, b1, W2, b2 = params
+    return (sig(X @ W1 + b1) @ W2 + b2).flatten()
 
-print("лучшая alpha =", best)
-losses = train(best)
+# многошаговый прогноз
+def forecast(params, history, steps):
+    window = list(history[-n_in:])
+    out = []
+    for _ in range(steps):
+        v = predict(params, np.array(window[-n_in:]).reshape(1, -1))[0]
+        out.append(v)
+        window.append(v)
+    return np.array(out)
 
-# прогнозы в исходном масштабе
-A1 = sig(Xtr @ W1 + b1)
-ptr = (A1 @ W2 + b2).flatten() * sy + my
-A1 = sig(Xte @ W1 + b1)
-pte = (A1 @ W2 + b2).flatten() * sy + my
-Ytr0 = Ytr * sy + my
-Yte0 = Yte * sy + my
 
-# Таблица обучения
-print("\nОбучение:")
-print(f"{'i':>4} | {'эталон':>10} | {'прогноз':>10} | {'отклонение':>12}")
-print("-" * 45)
-for i in range(len(Ytr0)):
-    print(f"{i:>4} | {Ytr0[i]:>10.4f} | {ptr[i]:>10.4f} | {ptr[i] - Ytr0[i]:>12.4f}")
+# оформление таблиц
+def print_table(title, headers, rows, fmts):
+    cells = [[f.format(v) for f, v in zip(fmts, r)] for r in rows]
+    w = [max(len(h), *(len(r[i]) for r in cells)) for i, h in enumerate(headers)]
+    row = lambda vals: "  ".join(f"{v:>{x}}" for v, x in zip(vals, w))
+    sep = "-" * (sum(w) + 2 * (len(w) - 1))
+    print("\n" + title)
+    print(sep)
+    print(row(headers))
+    print(sep)
+    for r in cells:
+        print(row(r))
+    print(sep)
 
-# Таблица теста
-print("\nТест:")
-print(f"{'i':>4} | {'эталон':>10} | {'прогноз':>10} | {'отклонение':>12}")
-print("-" * 45)
-for i in range(len(Yte0)):
-    print(f"{i:>4} | {Yte0[i]:>10.4f} | {pte[i]:>10.4f} | {pte[i] - Yte0[i]:>12.4f}")
+# подбираем alpha по ошибке обучения
+alphas = [0.01, 0.05, 0.1, 0.3, 0.5, 1.0]
+best, best_err = None, np.inf
+alpha_rows = []
+with np.errstate(all="ignore"):
+    for al in alphas:
+        params, losses = train(al)
+        fc = forecast(params, y_train, n_test_pts)
+        alpha_rows.append((al, losses[-1], np.mean((fc - y_test) ** 2)))
+        if np.isfinite(losses[-1]) and losses[-1] < best_err:
+            best_err, best = losses[-1], al
+
+print_table("ПОДБОР СКОРОСТИ ОБУЧЕНИЯ", ["alpha", "MSE обучения", "MSE прогноза"],
+            alpha_rows, ["{:g}", "{:.3e}", "{:.3e}"])
+print("\nлучшая alpha =", best)
+params, losses = train(best)
+ptr = predict(params, Xtr)
+pte = forecast(params, y_train, n_test_pts)
+
+# таблицы
+def make_rows(ref, got):
+    return [(i + 1, r, g, g - r) for i, (r, g) in enumerate(zip(ref, got))]
+
+hdr = ["№", "Эталон", "Получено", "Отклонение"]
+fm = ["{:d}", "{:.6f}", "{:.6f}", "{:+.2e}"]
+print_table("РЕЗУЛЬТАТЫ ОБУЧЕНИЯ", hdr, make_rows(Ytr, ptr), fm)
+print(f"MSE = {np.mean((ptr - Ytr) ** 2):.3e}   MAE = {np.mean(np.abs(ptr - Ytr)):.3e}")
+print_table("РЕЗУЛЬТАТЫ ПРОГНОЗИРОВАНИЯ", hdr, make_rows(y_test, pte), fm)
+print(f"MSE = {np.mean((pte - y_test) ** 2):.3e}   MAE = {np.mean(np.abs(pte - y_test)):.3e}")
 
 # графики
 plt.figure()
-plt.plot(x, y, 'k-', label='функция')
-plt.plot(x[n_in:n_in+len(ptr)], ptr, 'b.', label='train')
-plt.plot(x[n_in+len(ptr):n_in+len(ptr)+len(pte)], pte, 'r.', label='test')
-plt.legend()
-plt.grid()
-plt.title('прогноз')
-plt.show()
+plt.plot(x[:n_train_pts], y_train, 'k-', label='функция (обучение)')
+plt.plot(x[n_in:n_train_pts], ptr, 'b.', label='ИНС (обучение)')
+plt.legend(); plt.grid(); plt.title('участок обучения'); plt.show()
 
 plt.figure()
-plt.plot(losses)
-plt.title('ошибка по итерациям')
-plt.xlabel('эпоха')
-plt.ylabel('MSE')
-plt.grid()
-plt.show()
+plt.plot(x[n_train_pts:], y_test, 'k-o', label='эталон')
+plt.plot(x[n_train_pts:], pte, 'r.--', label='прогноз')
+plt.legend(); plt.grid(); plt.title('прогноз'); plt.show()
+
+plt.figure()
+plt.semilogy(losses)
+plt.title('ошибка по итерациям'); plt.xlabel('эпоха'); plt.ylabel('MSE')
+plt.grid(); plt.show()
